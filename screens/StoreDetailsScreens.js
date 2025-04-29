@@ -12,6 +12,40 @@ import {
   StatusBar,
 } from 'react-native';
 import axios from 'axios';
+import {API_BASE_URL} from '../config/env';
+
+// Error boundary class component
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {hasError: false, error: null};
+  }
+
+  static getDerivedStateFromError(error) {
+    return {hasError: true, error};
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Error caught by boundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Something went wrong!</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => this.setState({hasError: false})}>
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const StoreDetailsScreen = ({route}) => {
   const {barcodeId} = route.params;
@@ -22,18 +56,32 @@ const StoreDetailsScreen = ({route}) => {
   const [cartItems, setCartItems] = useState([]);
   const [totalPrice, setTotalPrice] = useState(0);
   const [totalDiscountedPrice, setTotalDiscountedPrice] = useState(0);
-
-
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
 
   useEffect(() => {
     const fetchStoreDetails = async () => {
       try {
-        const response = await axios.get(
-          `http://192.168.1.13:6000/api/stores/${barcodeId}`,
-        );
+        const response = await axios.get(`${API_BASE_URL}/stores/${barcodeId}`);
+        if (!response.data || !response.data.store) {
+          throw new Error('Invalid store data received');
+        }
         setStoreData(response.data);
       } catch (error) {
         console.error('Error fetching store details:', error);
+        Alert.alert(
+          'Error',
+          'Failed to fetch store details. Please try again.',
+          [
+            {
+              text: 'Retry',
+              onPress: () => fetchStoreDetails(),
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+          ],
+        );
       } finally {
         setLoading(false);
       }
@@ -122,16 +170,43 @@ const StoreDetailsScreen = ({route}) => {
     setTotalDiscountedPrice(discountedTotal);
   };
 
+  const validateOrderData = () => {
+    if (!storeData?.store?._id) {
+      throw new Error('Store information is not available');
+    }
+    if (!cartItems.length) {
+      throw new Error('Cart is empty');
+    }
+    if (cartItems.some(item => !item.quantity || item.quantity <= 0)) {
+      throw new Error('Invalid item quantity in cart');
+    }
+    if (totalDiscountedPrice <= 0) {
+      throw new Error('Invalid order total');
+    }
+    return true;
+  };
+
   // Place Order
   const placeOrder = async () => {
+    if (isPlacingOrder) return;
+
+    setIsPlacingOrder(true);
     try {
-      const response = await axios.post(`http://192.168.1.13:6000/api/orders`, {
+      // Validate order data
+      validateOrderData();
+
+      const response = await axios.post(`${API_BASE_URL}/orders`, {
         items: cartItems,
-        mobile: '9672281491',
-        store: '67b17fc5b9ef7445674e715c',
-        total: totalDiscountedPrice, // Using discounted price for order
+        mobile: '9672281491', // This should come from user context/state
+        store: storeData.store._id,
+        total: totalDiscountedPrice,
         status: 'Pending',
       });
+
+      if (!response.data) {
+        throw new Error('Failed to create order');
+      }
+
       Alert.alert(
         'Order Successful',
         'Your order has been placed successfully!',
@@ -142,7 +217,22 @@ const StoreDetailsScreen = ({route}) => {
       setTotalDiscountedPrice(0);
     } catch (error) {
       console.error('Error placing order:', error);
-      Alert.alert('Order Failed', 'Something went wrong. Please try again.');
+      Alert.alert(
+        'Order Failed',
+        error.message || 'Something went wrong. Please try again.',
+        [
+          {
+            text: 'Retry',
+            onPress: () => placeOrder(),
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ],
+      );
+    } finally {
+      setIsPlacingOrder(false);
     }
   };
 
@@ -188,148 +278,153 @@ const StoreDetailsScreen = ({route}) => {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.storeName}>{storeData?.store?.name}</Text>
-          {cartItems.length > 0 && (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{cartItems.length}</Text>
-            </View>
-          )}
-        </View>
-
-        <FlatList
-          data={groupItemsByCategory()}
-          keyExtractor={category => category._id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContainer}
-          renderItem={({item: category}) => (
-            <Animated.View style={styles.categoryContainer}>
-              <TouchableOpacity
-                style={[
-                  styles.categoryHeader,
-                  expandedCategory === category._id &&
-                    styles.categoryHeaderActive,
-                ]}
-                onPress={() => toggleCategory(category._id)}>
-                <Text style={styles.categoryName}>{category.name}</Text>
-                <Animated.Text
-                  style={[
-                    styles.dropdownArrow,
-                    {
-                      transform: [
-                        {
-                          rotate: animation.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: ['0deg', '180deg'],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}>
-                  ▼
-                </Animated.Text>
-              </TouchableOpacity>
-
-              {expandedCategory === category._id && (
-                <Animated.View
-                  style={[
-                    styles.itemsContainer,
-                    {
-                      opacity: animation,
-                      transform: [
-                        {
-                          translateY: animation.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [-20, 0],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}>
-                  <FlatList
-                    data={category.items}
-                    keyExtractor={item => item._id}
-                    scrollEnabled={false}
-                    renderItem={({item}) => (
-                      <View style={styles.itemContainer}>
-                        <View style={styles.itemDetails}>
-                          <Text style={styles.itemName}>{item.name}</Text>
-                          <View style={styles.priceContainer}>
-                            <Text style={styles.itemPrice}>₹{item.mrp}</Text>
-                            {item.discount > 0 && (
-                              <View style={styles.discountBadge}>
-                                <Text style={styles.itemDiscount}>
-                                  {item.discount}% OFF
-                                </Text>
-                              </View>
-                            )}
-                          </View>
-                        </View>
-                        <View style={styles.counterContainer}>
-                          <TouchableOpacity
-                            style={[
-                              styles.counterButton,
-                              {opacity: item.quantity ? 1 : 0.5},
-                            ]}
-                            onPress={() => handleDecrement(item)}>
-                            <Text style={styles.counterButtonText}>−</Text>
-                          </TouchableOpacity>
-                          <Text style={styles.counterText}>
-                            {item.quantity || 0}
-                          </Text>
-                          <TouchableOpacity
-                            style={styles.counterButton}
-                            onPress={() => handleIncrement(item)}>
-                            <Text style={styles.counterButtonText}>+</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
-                  />
-                </Animated.View>
-              )}
-            </Animated.View>
-          )}
-        />
-
-        {cartItems.length > 0 && (
-          <Animated.View style={styles.cartSummary}>
-            <View style={styles.priceSummary}>
-              <Text style={styles.originalPriceLabel}>Original Price</Text>
-              <Text style={styles.originalPriceValue}>
-                ₹{totalPrice.toFixed(2)}
-              </Text>
-            </View>
-
-            {calculateSavings() > 0 && (
-              <View style={styles.savingsContainer}>
-                <Text style={styles.savingsLabel}>Your Savings</Text>
-                <Text style={styles.savingsValue}>
-                  ₹{calculateSavings().toFixed(2)}
-                </Text>
+    <ErrorBoundary>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
+        <View style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.storeName}>{storeData?.store?.name}</Text>
+            {cartItems.length > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>{cartItems.length}</Text>
               </View>
             )}
+          </View>
 
-            <View style={styles.discountedPriceContainer}>
-              <Text style={styles.discountedPriceLabel}>Final Price</Text>
-              <Text style={styles.discountedPriceValue}>
-                ₹{totalDiscountedPrice.toFixed(2)}
-              </Text>
-            </View>
+          <FlatList
+            data={groupItemsByCategory()}
+            keyExtractor={category => category._id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContainer}
+            renderItem={({item: category}) => (
+              <Animated.View style={styles.categoryContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.categoryHeader,
+                    expandedCategory === category._id &&
+                      styles.categoryHeaderActive,
+                  ]}
+                  onPress={() => toggleCategory(category._id)}>
+                  <Text style={styles.categoryName}>{category.name}</Text>
+                  <Animated.Text
+                    style={[
+                      styles.dropdownArrow,
+                      {
+                        transform: [
+                          {
+                            rotate: animation.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: ['0deg', '180deg'],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}>
+                    ▼
+                  </Animated.Text>
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.orderButton}
-              onPress={placeOrder}
-              activeOpacity={0.8}>
-              <Text style={styles.orderButtonText}>Place Order</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
-      </View>
-    </SafeAreaView>
+                {expandedCategory === category._id && (
+                  <Animated.View
+                    style={[
+                      styles.itemsContainer,
+                      {
+                        opacity: animation,
+                        transform: [
+                          {
+                            translateY: animation.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [-20, 0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}>
+                    <FlatList
+                      data={category.items}
+                      keyExtractor={item => item._id}
+                      scrollEnabled={false}
+                      renderItem={({item}) => (
+                        <View style={styles.itemContainer}>
+                          <View style={styles.itemDetails}>
+                            <Text style={styles.itemName}>{item.name}</Text>
+                            <View style={styles.priceContainer}>
+                              <Text style={styles.itemPrice}>₹{item.mrp}</Text>
+                              {item.discount > 0 && (
+                                <View style={styles.discountBadge}>
+                                  <Text style={styles.itemDiscount}>
+                                    {item.discount}% OFF
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                          <View style={styles.counterContainer}>
+                            <TouchableOpacity
+                              style={[
+                                styles.counterButton,
+                                {opacity: item.quantity ? 1 : 0.5},
+                              ]}
+                              onPress={() => handleDecrement(item)}>
+                              <Text style={styles.counterButtonText}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={styles.counterText}>
+                              {item.quantity || 0}
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.counterButton}
+                              onPress={() => handleIncrement(item)}>
+                              <Text style={styles.counterButtonText}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      )}
+                    />
+                  </Animated.View>
+                )}
+              </Animated.View>
+            )}
+          />
+
+          {cartItems.length > 0 && (
+            <Animated.View style={styles.cartSummary}>
+              <View style={styles.priceSummary}>
+                <Text style={styles.originalPriceLabel}>Original Price</Text>
+                <Text style={styles.originalPriceValue}>
+                  ₹{totalPrice.toFixed(2)}
+                </Text>
+              </View>
+
+              {calculateSavings() > 0 && (
+                <View style={styles.savingsContainer}>
+                  <Text style={styles.savingsLabel}>Your Savings</Text>
+                  <Text style={styles.savingsValue}>
+                    ₹{calculateSavings().toFixed(2)}
+                  </Text>
+                </View>
+              )}
+
+              <View style={styles.discountedPriceContainer}>
+                <Text style={styles.discountedPriceLabel}>Final Price</Text>
+                <Text style={styles.discountedPriceValue}>
+                  ₹{totalDiscountedPrice.toFixed(2)}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.orderButton, isPlacingOrder && {opacity: 0.7}]}
+                onPress={placeOrder}
+                disabled={isPlacingOrder}
+                activeOpacity={0.8}>
+                <Text style={styles.orderButtonText}>
+                  {isPlacingOrder ? 'Placing Order...' : 'Place Order'}
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+          )}
+        </View>
+      </SafeAreaView>
+    </ErrorBoundary>
   );
 };
 
@@ -557,6 +652,28 @@ const styles = StyleSheet.create({
   orderButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
+    fontWeight: '600',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  errorText: {
+    fontSize: 18,
+    color: '#EF4444',
+    marginBottom: 16,
+  },
+  retryButton: {
+    backgroundColor: '#6366F1',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: '600',
   },
 });

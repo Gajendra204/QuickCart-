@@ -31,7 +31,7 @@ const HomeScreen = ({ navigation }) => {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
+      style={styles.container}>
 
       <View style={styles.innerContainer}>
         <Text style={styles.title}>📦 Barcode Scanner</Text>
